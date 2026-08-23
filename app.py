@@ -1,73 +1,33 @@
 from flask import Flask, jsonify, request
+from flask_cors import CORS
 import sqlite3
+import hashlib
 import os
-import secrets
 from functools import wraps
 from dotenv import load_dotenv
-from flask_cors import CORS
-from werkzeug.security import generate_password_hash, check_password_hash
 
-# Load environment variables from .env
+# Load environment variables
 load_dotenv()
 
 app = Flask(__name__)
 
-API_TOKEN = os.getenv("API_TOKEN")
+# Allow requests from your frontend
+CORS(app)
 
-# -----------------------------
-# Database
-# -----------------------------
+# =========================
+# DATABASE
+# =========================
+
+DATABASE = "products.db"
+
 
 def get_db_connection():
-    conn = sqlite3.connect("products.db")
+    conn = sqlite3.connect(DATABASE)
     conn.row_factory = sqlite3.Row
     return conn
 
 
-# -----------------------------
-# API Token Authentication
-# -----------------------------
-
-def require_token(f):
-    @wraps(f)
-    def decorated_function(*args, **kwargs):
-
-        authorization = request.headers.get("Authorization")
-
-        if not authorization:
-            return jsonify({
-                "error": "Authorization header missing"
-            }), 401
-
-        if not authorization.startswith("Bearer "):
-            return jsonify({
-                "error": "Invalid authorization format"
-            }), 401
-
-        token = authorization.split(" ", 1)[1]
-
-        if not API_TOKEN:
-            return jsonify({
-                "error": "API token is not configured"
-            }), 500
-
-        if not secrets.compare_digest(token, API_TOKEN):
-            return jsonify({
-                "error": "Unauthorized"
-            }), 401
-
-        return f(*args, **kwargs)
-
-    return decorated_function
-
-
-# -----------------------------
-# Initialize Database
-# -----------------------------
-
-@app.route("/init", methods=["GET"])
 def init_db():
-
     conn = get_db_connection()
 
     conn.execute("""
@@ -89,57 +49,81 @@ def init_db():
     conn.commit()
     conn.close()
 
-    return jsonify({
-        "message": "Database init complete"
-    })
+
+# =========================
+# TOKEN AUTHENTICATION
+# =========================
+
+API_TOKEN = os.getenv("API_TOKEN")
 
 
-# -----------------------------
-# Home
-# -----------------------------
+def require_token(f):
+
+    @wraps(f)
+    def decorated_function(*args, **kwargs):
+
+        token = request.headers.get("Authorization")
+
+        if not token:
+            return jsonify({
+                "error": "Authorization token required"
+            }), 401
+
+        if token != f"Bearer {API_TOKEN}":
+            return jsonify({
+                "error": "Invalid token"
+            }), 403
+
+        return f(*args, **kwargs)
+
+    return decorated_function
+
+
+# =========================
+# HOME
+# =========================
 
 @app.route("/", methods=["GET"])
 def home():
 
     return jsonify({
-        "message": "Hello from our first server"
+        "message": "Flask Product API is running"
     })
 
 
-# -----------------------------
-# Get Products
-# -----------------------------
+# =========================
+# GET PRODUCTS
+# =========================
 
 @app.route("/products", methods=["GET"])
-@require_token
 def get_products():
 
     conn = get_db_connection()
 
-    rows = conn.execute(
+    products = conn.execute(
         "SELECT * FROM products"
     ).fetchall()
 
     conn.close()
 
-    products = [dict(row) for row in rows]
+    return jsonify([
+        dict(product)
+        for product in products
+    ])
 
-    return jsonify(products)
 
-
-# -----------------------------
-# Add Product
-# -----------------------------
+# =========================
+# ADD PRODUCT
+# =========================
 
 @app.route("/products", methods=["POST"])
-@require_token
 def add_product():
 
     data = request.get_json()
 
     if not data:
         return jsonify({
-            "error": "Request body is required"
+            "error": "JSON data required"
         }), 400
 
     name = data.get("name")
@@ -152,16 +136,14 @@ def add_product():
 
     try:
         price = float(price)
-    except (TypeError, ValueError):
+    except ValueError:
         return jsonify({
             "error": "Price must be a number"
         }), 400
 
     conn = get_db_connection()
 
-    cursor = conn.cursor()
-
-    cursor.execute(
+    cursor = conn.execute(
         """
         INSERT INTO products (name, price)
         VALUES (?, ?)
@@ -175,30 +157,26 @@ def add_product():
 
     conn.close()
 
-    new_product = {
+    return jsonify({
+        "message": "Product added successfully",
         "id": new_id,
         "name": name,
         "price": price
-    }
-
-    return jsonify({
-        "message": "Product added",
-        "product": new_product
     }), 201
 
 
-# -----------------------------
-# Register
-# -----------------------------
+# =========================
+# REGISTER USER
+# =========================
 
 @app.route("/register", methods=["POST"])
-def register():
+def register_user():
 
     data = request.get_json()
 
     if not data:
         return jsonify({
-            "error": "Request body is required"
+            "error": "JSON data required"
         }), 400
 
     username = data.get("username")
@@ -206,15 +184,13 @@ def register():
 
     if not username or not password:
         return jsonify({
-            "error": "Missing username or password"
+            "error": "Username and password are required"
         }), 400
 
-    if len(password) < 6:
-        return jsonify({
-            "error": "Password must be at least 6 characters"
-        }), 400
-
-    hashed_password = generate_password_hash(password)
+    # Hash password
+    hashed_password = hashlib.sha256(
+        password.encode()
+    ).hexdigest()
 
     conn = get_db_connection()
 
@@ -245,58 +221,16 @@ def register():
     }), 201
 
 
-# -----------------------------
-# Login
-# -----------------------------
-
-@app.route("/login", methods=["POST"])
-def login():
-
-    data = request.get_json()
-
-    if not data:
-        return jsonify({
-            "error": "Request body is required"
-        }), 400
-
-    username = data.get("username")
-    password = data.get("password")
-
-    if not username or not password:
-        return jsonify({
-            "error": "Missing username or password"
-        }), 400
-
-    conn = get_db_connection()
-
-    user = conn.execute(
-        """
-        SELECT * FROM users
-        WHERE username = ?
-        """,
-        (username,)
-    ).fetchone()
-
-    conn.close()
-
-    if not user:
-        return jsonify({
-            "error": "Invalid credentials"
-        }), 401
-
-    if not check_password_hash(user["password"], password):
-        return jsonify({
-            "error": "Invalid credentials"
-        }), 401
-
-    return jsonify({
-        "message": f"Welcome {username}!"
-    })
-
-
-# -----------------------------
-# Run Server
-# -----------------------------
+# =========================
+# RUN SERVER
+# =========================
 
 if __name__ == "__main__":
-    app.run(debug=True)
+
+    init_db()
+
+    app.run(
+        host="0.0.0.0",
+        port=int(os.environ.get("PORT", 5000)),
+        debug=True
+    )
