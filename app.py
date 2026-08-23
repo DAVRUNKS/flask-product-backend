@@ -4,6 +4,7 @@ import os
 import secrets
 from functools import wraps
 from dotenv import load_dotenv
+from flask_cors import CORS
 from werkzeug.security import generate_password_hash, check_password_hash
 
 # Load environment variables from .env
