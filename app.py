@@ -12,8 +12,14 @@ load_dotenv()
 app = Flask(__name__)
 
 # Allow requests from your frontend
-CORS(app)
-
+CORS(app, resources={
+    r"/*": {
+        "origins": [
+            "http://127.0.0.1:5500",
+            "http://localhost:5500"
+        ]
+    }
+})
 # =========================
 # DATABASE
 # =========================
